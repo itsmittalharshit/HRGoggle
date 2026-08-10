@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CandidLens — AI Mock Interview Coach</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div id="app">
+
+  <!-- ============ SIDEBAR ============ -->
+  <aside class="rail">
+    <div class="rail-brand">
+      <span class="rail-brand-mark">◎</span>
+      <div>
+        <p class="rail-brand-name">CandidLens</p>
+        <p class="rail-brand-sub">Mock Interview Coach</p>
+      </div>
+    </div>
+
+    <nav class="rail-steps" id="rail-steps">
+      <button class="rail-step is-active" data-view="setup">
+        <span class="rail-step-num">01</span>
+        <span class="rail-step-label">Case File<br><small>Upload &amp; questions</small></span>
+      </button>
+      <button class="rail-step" data-view="interview" disabled>
+        <span class="rail-step-num">02</span>
+        <span class="rail-step-label">Interview<br><small>Live session</small></span>
+      </button>
+      <button class="rail-step" data-view="report" disabled>
+        <span class="rail-step-num">03</span>
+        <span class="rail-step-label">Dossier<br><small>Score &amp; feedback</small></span>
+      </button>
+    </nav>
+
+    <div class="rail-foot">
+      <p>Runs entirely in your browser. Nothing is uploaded to a server.</p>
+    </div>
+  </aside>
+
+  <!-- ============ MAIN ============ -->
+  <main class="stage">
+
+    <!-- ---------- VIEW 1: SETUP ---------- -->
+    <section class="view is-active" id="view-setup">
+      <header class="view-head">
+        <p class="eyebrow">Step 01 — Open a case file</p>
+        <h1>Let's build your interview.</h1>
+        <p class="lede">Upload your resume as a PDF. CandidLens reads it, pulls out your skills and projects, and writes questions aimed at the specific things you've built.</p>
+      </header>
+
+      <div class="card upload-card">
+        <div class="dropzone" id="dropzone">
+          <input type="file" id="resume-input" accept="application/pdf" hidden>
+          <p class="dz-icon">📄</p>
+          <p class="dz-title">Drop your resume here</p>
+          <p class="dz-sub">or <button class="link-btn" id="browse-btn">browse for a PDF</button></p>
+          <p class="dz-file" id="dz-filename"></p>
+        </div>
+
+        <div class="parse-status" id="parse-status" hidden>
+          <div class="spinner"></div>
+          <span>Reading resume…</span>
+        </div>
+      </div>
+
+      <div class="card extracted-card" id="extracted-card" hidden>
+        <h2>What we found</h2>
+        <div class="chip-row" id="skill-chips"></div>
+
+        <h2>Your interview questions</h2>
+        <p class="hint">These are generated from your resume. Edit or remove any before you start.</p>
+        <ol class="question-list" id="question-list"></ol>
+        <button class="ghost-btn" id="add-question-btn">+ Add a question</button>
+      </div>
+
+      <details class="card advanced-card">
+        <summary>Advanced — connect an LLM for sharper questions &amp; scoring</summary>
+        <p class="hint">Optional. Paste an OpenAI API key to generate richer follow-up questions and semantic-similarity scoring instead of the built-in keyword matching. The key stays in this browser tab only (saved to localStorage) and is sent directly from your browser to OpenAI — fine for local testing, <strong>do not use this on a publicly deployed copy of the site</strong> since the key would be visible to anyone.</p>
+        <input type="password" id="api-key-input" placeholder="sk-...">
+        <button class="ghost-btn" id="save-key-btn">Save key for this browser</button>
+        <p class="hint" id="key-status"></p>
+      </details>
+
+      <button class="primary-btn start-btn" id="to-interview-btn" disabled>Begin interview →</button>
+    </section>
+
+    <!-- ---------- VIEW 2: INTERVIEW ---------- -->
+    <section class="view" id="view-interview">
+      <header class="view-head interview-head">
+        <p class="eyebrow" id="q-counter">Question 1 of 6</p>
+        <h1 id="q-text">—</h1>
+      </header>
+
+      <div class="interview-grid">
+
+        <div class="cam-col">
+          <div class="cam-frame">
+            <video id="webcam" autoplay muted playsinline></video>
+            <canvas id="overlay"></canvas>
+            <div class="cam-badge" id="rec-badge">● not recording</div>
+          </div>
+
+          <div class="dial-wrap">
+            <svg viewBox="0 0 200 110" class="dial">
+              <path d="M10,100 A90,90 0 0 1 190,100" class="dial-track"/>
+              <path d="M10,100 A90,90 0 0 1 190,100" class="dial-fill" id="dial-fill"/>
+              <text x="100" y="90" class="dial-num" id="dial-num">--</text>
+            </svg>
+            <p class="dial-label">Live confidence signal</p>
+          </div>
+
+          <div class="live-metrics">
+            <div><span id="m-eye">--</span><label>Eye contact</label></div>
+            <div><span id="m-wpm">--</span><label>Words / min</label></div>
+            <div><span id="m-filler">--</span><label>Filler words</label></div>
+          </div>
+        </div>
+
+        <div class="answer-col">
+          <div class="card transcript-card">
+            <h2>Your answer <span class="live-dot" id="live-dot"></span></h2>
+            <div class="transcript" id="transcript">Press <strong>Start Answer</strong> and speak — your words will appear here.</div>
+          </div>
+
+          <div class="controls-row">
+            <button class="primary-btn" id="record-btn">Start answer</button>
+            <button class="ghost-btn" id="skip-btn">Skip question →</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ---------- VIEW 3: REPORT ---------- -->
+    <section class="view" id="view-report">
+      <header class="view-head">
+        <p class="eyebrow">Step 03 — The dossier</p>
+        <h1>How you did.</h1>
+        <p class="lede" id="report-lede">Here's the full breakdown of content, delivery, and presence across every question.</p>
+      </header>
+
+      <div class="report-top">
+        <div class="card overall-card">
+          <p class="overall-label">Overall score</p>
+          <p class="overall-num" id="overall-score">--</p>
+          <p class="overall-tag" id="overall-tag">—</p>
+        </div>
+        <div class="card radar-card">
+          <canvas id="radar-chart"></canvas>
+        </div>
+      </div>
+
+      <div class="card breakdown-card">
+        <h2>Question-by-question</h2>
+        <div id="qa-breakdown"></div>
+      </div>
+
+      <div class="controls-row">
+        <button class="ghost-btn" id="print-btn">Print / save as PDF</button>
+        <button class="ghost-btn" id="restart-btn">Start a new interview</button>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+<script src="script.js"></script>
+</body>
+</html>
