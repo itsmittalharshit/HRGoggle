@@ -126,6 +126,4 @@ is HTTPS by default). **Use Chrome or Edge** for live speech
 transcription — Safari/Firefox will parse resumes and run the vision
 tracking, but speech-to-text won't work.
 
-## License
-
-MIT — do whatever you want with it.
+License: MIT
