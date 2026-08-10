@@ -65,6 +65,10 @@ function speakQuestion(text) {
   window.speechSynthesis.speak(utter);
 }
 
+function stopVoice() {
+  if (ttsSupported) window.speechSynthesis.cancel();
+}
+
 const replayBtn = document.getElementById("replay-btn");
 if (!ttsSupported) {
   replayBtn.hidden = true;
@@ -159,11 +163,20 @@ document.querySelectorAll(".rail-step").forEach(btn => {
     // answers exist so far, so it's never a dead end.
     if (view === "report") {
       if (state.recognizing) finishAnswer();
+      stopVoice();
       try { buildReport(); } catch (e) { console.error("buildReport failed:", e); }
     }
     goToView(view);
   });
 });
+
+// If this tab already has completed interviews from earlier in the session
+// (e.g. the page was refreshed, or a new interview hasn't finished yet
+// after a restart), keep the Results tab reachable so past attempts aren't
+// stranded behind a "finish an interview first" wall.
+if (loadHistory().length) {
+  document.querySelector('.rail-step[data-view="report"]').disabled = false;
+}
 
 /* ---------------------------------------------------------------------
    RESUME UPLOAD + PARSING
@@ -273,17 +286,49 @@ const FOLLOWUP_TEMPLATES = [
   () => `And if you had twice the time, what would you have done differently?`,
 ];
 
+/* Sanity check for a generated question — catches the case where a resume's
+   text was garbled (bad PDF export, stray symbols, a sentence fragment)
+   and the quoted-context template turned it into something unreadable.
+   If a question fails this, we fall back to the plain non-quoted version
+   instead of showing the person a broken sentence. */
+function isSensibleQuestion(text) {
+  if (!text) return false;
+  const t = text.trim();
+  if (t.length < 20 || t.length > 260) return false;
+  if (!/[.?]$/.test(t)) return false; // should end like a real sentence
+  if (/undefined|null|NaN/.test(t)) return false;
+  const letters = (t.match(/[a-zA-Z0-9 ]/g) || []).length;
+  if (letters / t.length < 0.75) return false; // too many stray symbols = likely garbled extraction
+  return true;
+}
+
+/* Checked separately from the full assembled question — a garbled resume
+   snippet is a small fraction of the final question's character count, so
+   checking only the assembled sentence lets bad snippets slip through
+   diluted by clean template wording. This checks the raw quote itself. */
+function isSensibleContext(ctx) {
+  if (!ctx) return false;
+  const words = ctx.match(/[A-Za-z]{3,}/g) || [];
+  if (words.length < 4) return false; // needs to read like an actual sentence, not a fragment
+  const letters = (ctx.match(/[a-zA-Z0-9 ]/g) || []).length;
+  if (letters / ctx.length < 0.8) return false;
+  return true;
+}
+
 function generateQuestionsLocally(text, skills) {
   const questions = [];
   const usedSkills = shuffle(skills).slice(0, 3); // random 3 skills → main + follow-up each = 6 grounded questions
 
   usedSkills.forEach((skill) => {
     const contextLines = findSkillContextLines(text, skill);
-    const context = contextLines[0];
+    const rawContext = contextLines[0];
+    const context = isSensibleContext(rawContext) ? rawContext : null;
     const mainTemplate = pickRandom(SKILL_QUESTION_TEMPLATES);
     const followTemplate = pickRandom(FOLLOWUP_TEMPLATES);
+    let mainText = mainTemplate(skill, context);
+    if (!isSensibleQuestion(mainText)) mainText = mainTemplate(skill, null); // final safety net
     questions.push({
-      text: mainTemplate(skill, context),
+      text: mainText,
       keywords: [skill.toLowerCase(), "because", "challenge", "result", "learned"],
       skill
     });
@@ -525,7 +570,7 @@ document.getElementById("record-btn").addEventListener("click", () => {
 });
 
 function startAnswer() {
-  if (ttsSupported) window.speechSynthesis.cancel(); // don't talk over the person once they start
+  stopVoice(); // don't talk over the person once they start
   state.recognizing = true;
   state.answerStartTime = Date.now();
   document.getElementById("record-btn").textContent = "Finish answer";
@@ -550,6 +595,7 @@ async function finishAnswer() {
 }
 
 document.getElementById("skip-btn").addEventListener("click", async () => {
+  stopVoice(); // in case the question is still being read aloud when skipped
   if (state.recognizing) {
     await finishAnswer(); // preserves whatever was said so far, doesn't discard it
   } else {
@@ -643,6 +689,7 @@ function advanceQuestion() {
   if (state.currentQ < state.questions.length) {
     loadQuestion(state.currentQ);
   } else {
+    stopVoice(); // the interview is over — no question should keep talking on the results screen
     state.interviewEndTime = Date.now();
     if (camera) { try { camera.stop(); } catch (e) { console.warn(e); } }
     try { buildReport(); } catch (e) { console.error("buildReport failed, showing report anyway:", e); }
@@ -662,6 +709,25 @@ function recordSessionHistoryOnce(overall, totalSec, answeredCount) {
 let radarChart, barChart, timeChart, historyChart;
 function buildReport() {
   const valid = state.answers.filter(a => a && !a.skipped);
+  const hasCurrent = state.answers.length > 0;
+
+  // Only log a finished interview to session history once, not on every
+  // manual peek at the report tab mid-interview.
+  if (state.interviewEndTime) {
+    const overallNow = valid.length ? Math.round(valid.reduce((s, a) => s + a.overall, 0) / valid.length) : 0;
+    const totalSecNow = state.interviewStartTime
+      ? ((state.interviewEndTime || Date.now()) - state.interviewStartTime) / 1000 : 0;
+    recordSessionHistoryOnce(overallNow, totalSecNow, valid.length);
+  }
+  renderHistory();
+
+  // If there's no current-attempt data (e.g. right after "Start a new
+  // interview" but before finishing the next one), leave whatever was
+  // rendered from the last completed attempt on screen rather than
+  // overwriting it with zeros — the history list above still shows every
+  // past attempt regardless.
+  if (!hasCurrent) return;
+
   const overall = valid.length
     ? Math.round(valid.reduce((s, a) => s + a.overall, 0) / valid.length) : 0;
 
@@ -680,13 +746,6 @@ function buildReport() {
     valid.length ? `~${formatTime(avgSec)} avg per answer` : "No answers recorded";
 
   const avg = (key) => valid.length ? Math.round(valid.reduce((s, a) => s + a[key], 0) / valid.length) : 0;
-
-  // Only log a finished interview to session history once, not on every
-  // manual peek at the report tab mid-interview.
-  if (state.interviewEndTime) {
-    recordSessionHistoryOnce(overall, totalSec, valid.length);
-  }
-  renderHistory(overall);
 
   if (typeof Chart === "undefined") {
     console.error("Chart.js failed to load — skipping charts, rest of the report still works.");
@@ -787,7 +846,7 @@ function buildReport() {
   }).join("");
 }
 
-function renderHistory(currentOverall) {
+function renderHistory() {
   const history = loadHistory();
   const historyCard = document.getElementById("history-card");
   if (!history.length) { historyCard.hidden = true; return; }
@@ -847,7 +906,7 @@ function ruleBasedFeedback(a) {
 document.getElementById("print-btn").addEventListener("click", () => window.print());
 document.getElementById("restart-btn").addEventListener("click", () => {
   // Reset in place (not a full page reload) so sessionStorage history survives.
-  if (ttsSupported) window.speechSynthesis.cancel();
+  stopVoice();
   if (recognition) { try { recognition.stop(); } catch (e) {} }
   state.recognizing = false;
   if (camera) { try { camera.stop(); } catch (e) {} }
@@ -869,8 +928,10 @@ document.getElementById("restart-btn").addEventListener("click", () => {
   document.getElementById("dz-filename").textContent = "";
   document.getElementById("ready-status").hidden = true;
   document.getElementById("to-interview-btn").disabled = true;
-  document.querySelectorAll('.rail-step[data-view="interview"], .rail-step[data-view="report"]')
-    .forEach(s => s.disabled = true);
+  document.querySelector('.rail-step[data-view="interview"]').disabled = true;
+  // Keep the Results tab open if there's session history to look back on —
+  // only lock it again if this tab has no completed interviews at all.
+  document.querySelector('.rail-step[data-view="report"]').disabled = loadHistory().length === 0;
   goToView("setup");
 });
 
