@@ -4,11 +4,31 @@
    speech-to-text (Web Speech API), and rule-based / optional-LLM scoring.
    ========================================================================= */
 
-if (typeof pdfjsLib !== "undefined") {
-  pdfjsLib.GlobalWorkerOptions.workerSrc =
-    "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
-} else {
+const PDF_WORKER_URL = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+
+if (typeof pdfjsLib === "undefined") {
   console.error("pdf.js failed to load from CDN — resume upload will not work until this is fixed.");
+}
+
+/* Some browsers refuse to spin up a Worker() pointed at a cross-origin CDN
+   URL directly. Fetching the worker script ourselves and handing pdf.js a
+   same-origin blob: URL sidesteps that, with a fallback to the raw CDN URL
+   if the fetch itself fails (e.g. offline). */
+let pdfWorkerReady = null;
+function ensurePdfWorker() {
+  if (!pdfWorkerReady) {
+    pdfWorkerReady = fetch(PDF_WORKER_URL)
+      .then(res => { if (!res.ok) throw new Error(`worker fetch returned ${res.status}`); return res.text(); })
+      .then(code => {
+        const blobUrl = URL.createObjectURL(new Blob([code], { type: "application/javascript" }));
+        pdfjsLib.GlobalWorkerOptions.workerSrc = blobUrl;
+      })
+      .catch(err => {
+        console.warn("Blob-URL worker setup failed, falling back to direct CDN URL:", err);
+        pdfjsLib.GlobalWorkerOptions.workerSrc = PDF_WORKER_URL;
+      });
+  }
+  return pdfWorkerReady;
 }
 
 /* ---------------------------------------------------------------------
@@ -105,6 +125,7 @@ async function handleResumeFile(file) {
   document.getElementById("parse-status").hidden = false;
 
   try {
+    await ensurePdfWorker();
     const buf = await file.arrayBuffer();
     const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
     let text = "";
@@ -113,12 +134,13 @@ async function handleResumeFile(file) {
       const content = await page.getTextContent();
       text += content.items.map(it => it.str).join(" ") + "\n";
     }
+    if (!text.trim()) throw new Error("No extractable text found (likely a scanned/image-only PDF).");
     state.resumeText = text;
     await buildInterviewFromResume(text);
   } catch (err) {
-    console.error(err);
+    console.error("Resume parsing failed:", err);
     document.getElementById("parse-status").hidden = true;
-    alert("Couldn't read that PDF. Try a different export (avoid scanned/image-only PDFs).");
+    alert(`Couldn't read that PDF.\n\nDetails: ${err.message || err}\n\nOpen the browser console (F12) for more, or try re-exporting the PDF.`);
   }
 }
 
