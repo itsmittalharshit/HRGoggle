@@ -95,6 +95,21 @@ function goToView(name) {
   });
 }
 
+document.querySelectorAll(".rail-step").forEach(btn => {
+  btn.addEventListener("click", () => {
+    if (btn.disabled) return;
+    const view = btn.dataset.view;
+    // Manual escape hatch: if the person jumps to the report tab directly
+    // (interview stalled, or they just want to stop early), build the
+    // report from whatever answers exist so far rather than doing nothing.
+    if (view === "report") {
+      if (state.recognizing) finishAnswer();
+      try { buildReport(); } catch (e) { console.error("buildReport failed:", e); }
+    }
+    goToView(view);
+  });
+});
+
 /* ---------------------------------------------------------------------
    RESUME UPLOAD + PARSING
 --------------------------------------------------------------------- */
@@ -171,22 +186,42 @@ function extractSkills(text) {
   return [...found];
 }
 
-/* Pull short bullet-like lines that mention a known skill, to ground follow-up questions */
+/* Pull short bullet-like lines that mention a known skill, to ground follow-up questions.
+   Skip lines that are just skill enumerations ("Languages: Python, Dart, C...") rather
+   than an actual sentence about a project. */
+const LIST_HEADER_RE = /^(languages|technologies|technical skills|concepts|skills|relevant coursework)\s*:/i;
 function findSkillContextLines(text, skill) {
   const lines = text.split(/\n|(?<=[.])\s+/).map(l => l.trim()).filter(Boolean);
-  return lines.filter(l => l.toLowerCase().includes(skill.toLowerCase()) && l.length > 25 && l.length < 220);
+  return lines.filter(l =>
+    l.toLowerCase().includes(skill.toLowerCase()) &&
+    l.length > 25 && l.length < 220 &&
+    !LIST_HEADER_RE.test(l) &&
+    (l.match(/,/g) || []).length < 5 // enumerated lists tend to be comma-heavy
+  );
 }
+
+/* Several distinct angles per skill, so a 5-skill resume doesn't produce
+   the same sentence five times with the noun swapped. */
+const SKILL_QUESTION_TEMPLATES = [
+  (skill, ctx) => ctx
+    ? `You mentioned "${truncate(ctx, 100)}" — what was the hardest technical decision in that piece, and why did you go that way?`
+    : `Tell me about a specific project where you used ${skill}. What made it non-trivial?`,
+  (skill) => `If you rebuilt your ${skill} work today knowing what you know now, what would you change?`,
+  (skill) => `Walk me through a bug or failure you hit while working with ${skill}. How did you track it down?`,
+  (skill) => `How did you land on ${skill} over the alternatives for that project? What would've changed your mind?`,
+  (skill) => `What's a trade-off you made somewhere in your ${skill} work — speed vs. correctness, simplicity vs. flexibility, that kind of thing?`,
+  (skill) => `Someone on the team disagrees with how you used ${skill} there. How would you defend that decision?`
+];
 
 function generateQuestionsLocally(text, skills) {
   const questions = [];
   const usedSkills = skills.slice(0, 5); // cap so the interview stays a reasonable length
 
-  usedSkills.forEach(skill => {
+  usedSkills.forEach((skill, i) => {
     const contextLines = findSkillContextLines(text, skill);
     const context = contextLines[0];
-    const q = context
-      ? `I see you worked with ${skill} — you mentioned "${truncate(context, 110)}". Walk me through the technical decisions behind that and any trade-offs you hit.`
-      : `Your resume mentions ${skill}. Tell me about a specific project where you used it, and one thing that was harder than expected.`;
+    const template = SKILL_QUESTION_TEMPLATES[i % SKILL_QUESTION_TEMPLATES.length];
+    const q = template(skill, context);
     questions.push({ text: q, keywords: [skill.toLowerCase(), "because","challenge","result","learned"] });
   });
 
@@ -515,22 +550,36 @@ function startAnswer() {
   try { recognition && recognition.start(); } catch (e) {}
 }
 
-function finishAnswer() {
+async function finishAnswer() {
   state.recognizing = false;
   clearInterval(metricsTimer);
   try { recognition && recognition.stop(); } catch (e) {}
   document.getElementById("rec-badge").textContent = "● not recording";
-  recordAnswerResult();
+  // Web Speech API often delivers the last "final" result asynchronously,
+  // shortly after stop() is called — give it a moment before we score.
+  await new Promise(r => setTimeout(r, 350));
+  try { await recordAnswerResult(); }
+  catch (e) { console.error("Failed to record answer, continuing anyway:", e); }
   advanceQuestion();
 }
 
-document.getElementById("skip-btn").addEventListener("click", () => {
-  if (state.recognizing) finishAnswer(); else { recordAnswerResult(true); advanceQuestion(); }
+document.getElementById("skip-btn").addEventListener("click", async () => {
+  if (state.recognizing) {
+    await finishAnswer(); // preserves whatever was said so far, doesn't discard it
+  } else {
+    try { await recordAnswerResult(true); }
+    catch (e) { console.error(e); }
+    advanceQuestion();
+  }
 });
 
 async function recordAnswerResult(skipped = false) {
-  const q = state.questions[state.currentQ];
-  const transcript = state.transcriptFinal.trim();
+  const qIndex = state.currentQ;
+  const q = state.questions[qIndex];
+  // Include any not-yet-finalized speech: Web Speech API often delivers the
+  // last "final" result asynchronously after recognition.stop(), so relying
+  // on transcriptFinal alone can drop the last sentence someone just said.
+  const transcript = (state.transcriptFinal + " " + state.transcriptInterim).trim();
   const words = wordCount(transcript);
   const elapsedMin = state.answerStartTime ? Math.max(0.05, (Date.now() - state.answerStartTime) / 60000) : 0.05;
   const wpm = Math.round(words / elapsedMin);
@@ -543,7 +592,7 @@ async function recordAnswerResult(skipped = false) {
   const deliveryScore = Math.round((paceScore + fillerScore + eyePct + smilePct) / 4);
   const overall = skipped ? 0 : Math.round(0.55 * contentScore + 0.45 * deliveryScore);
 
-  state.answers[state.currentQ] = {
+  state.answers[qIndex] = {
     question: q.text, transcript, skipped, words, wpm,
     fillerCount: state.fillerCount, eyePct, smilePct,
     contentScore, paceScore, fillerScore, deliveryScore, overall,
@@ -551,8 +600,10 @@ async function recordAnswerResult(skipped = false) {
   };
 
   if (state.apiKey && !skipped && transcript.length > 0) {
-    try { state.answers[state.currentQ].llmFeedback = await getLLMFeedback(q.text, transcript); }
-    catch (e) { console.warn("LLM feedback failed", e); }
+    try {
+      const feedback = await getLLMFeedback(q.text, transcript);
+      if (state.answers[qIndex]) state.answers[qIndex].llmFeedback = feedback; // guard: index still valid
+    } catch (e) { console.warn("LLM feedback failed", e); }
   }
 }
 
@@ -584,9 +635,9 @@ function advanceQuestion() {
   if (state.currentQ < state.questions.length) {
     loadQuestion(state.currentQ);
   } else {
-    if (camera) camera.stop();
-    buildReport();
-    goToView("report");
+    if (camera) { try { camera.stop(); } catch (e) { console.warn(e); } }
+    try { buildReport(); } catch (e) { console.error("buildReport failed, showing report anyway:", e); }
+    goToView("report"); // always reachable, even if scoring/chart rendering hit an error above
   }
 }
 
@@ -618,14 +669,20 @@ function buildReport() {
   };
 
   if (radarChart) radarChart.destroy();
-  radarChart = new Chart(document.getElementById("radar-chart"), {
-    type: "radar",
-    data: radarData,
-    options: {
-      scales: { r: { min: 0, max: 100, ticks: { stepSize: 25, backdropColor: "transparent" } } },
-      plugins: { legend: { display: false } }
-    }
-  });
+  if (typeof Chart === "undefined") {
+    console.error("Chart.js failed to load — skipping the radar chart, rest of the report still works.");
+    document.getElementById("radar-chart").insertAdjacentHTML(
+      "afterend", `<p class="hint">Chart library didn't load — scores are still listed below.</p>`);
+  } else {
+    radarChart = new Chart(document.getElementById("radar-chart"), {
+      type: "radar",
+      data: radarData,
+      options: {
+        scales: { r: { min: 0, max: 100, ticks: { stepSize: 25, backdropColor: "transparent" } } },
+        plugins: { legend: { display: false } }
+      }
+    });
+  }
 
   const container = document.getElementById("qa-breakdown");
   container.innerHTML = state.answers.map((a, i) => {
