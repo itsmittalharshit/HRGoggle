@@ -33,7 +33,7 @@
       </button>
       <button class="rail-step" data-view="report" disabled>
         <span class="rail-step-num">03</span>
-        <span class="rail-step-label">Dossier<br><small>Score &amp; feedback</small></span>
+        <span class="rail-step-label">Results<br><small>Your score</small></span>
       </button>
     </nav>
 
@@ -48,31 +48,31 @@
     <!-- ---------- VIEW 1: WELCOME / MARKETING + UPLOAD ---------- -->
     <section class="view is-active" id="view-setup">
       <header class="hero">
-        <p class="eyebrow">Multimodal AI mock interview coach</p>
+        <p class="eyebrow">AI mock interview practice</p>
         <h1>See exactly how you come across —<br>before it matters.</h1>
-        <p class="lede">HRGoggle reads your resume, writes questions aimed at the actual things you've built, then watches and listens while you answer on camera. You get a scored report on what you said, how you said it, and how you looked saying it — all running in your browser, nothing uploaded anywhere.</p>
+        <p class="lede">HRGoggle reads your resume, writes questions about the things you've actually built, then watches and listens while you answer on camera. Afterwards you get a simple score showing what you said, how clearly you said it, and how you looked while saying it — all in your browser, nothing uploaded anywhere.</p>
       </header>
 
       <div class="feature-grid">
         <div class="feature-card feature-a">
           <p class="feature-icon">📄</p>
-          <h3>Resume-aware questions</h3>
-          <p>Your PDF is parsed for real skills and project lines, and the questions are written to reference them directly — with natural follow-ups, not a generic bank.</p>
+          <h3>Questions from your resume</h3>
+          <p>Your PDF is read for real skills and projects, and the questions are written about them directly — with natural follow-ups, not a generic list.</p>
         </div>
         <div class="feature-card feature-b">
           <p class="feature-icon">👁</p>
-          <h3>Live vision tracking</h3>
-          <p>Face-mesh tracking reads eye contact and expression frame-by-frame while you answer, feeding a live confidence dial.</p>
+          <h3>Eye contact tracking</h3>
+          <p>Your camera checks whether you're looking at it while you answer, shown live as a simple confidence dial.</p>
         </div>
         <div class="feature-card feature-c">
           <p class="feature-icon">🎙</p>
-          <h3>Speech &amp; timing analytics</h3>
-          <p>Pace, filler words, and time spent per question are measured as you talk and rolled into a clarity read on each answer.</p>
+          <h3>Speech &amp; timing checks</h3>
+          <p>Your speed, filler words, and time spent per question are measured as you talk. An AI voice can also read each question out loud for you.</p>
         </div>
         <div class="feature-card feature-d">
           <p class="feature-icon">📊</p>
-          <h3>Scored dossier</h3>
-          <p>A multi-chart report breaks down content, delivery, presence, and pacing — question by question and overall.</p>
+          <h3>Easy-to-read results</h3>
+          <p>Simple charts show your score for content, pace, and eye contact — for each question and overall.</p>
         </div>
       </div>
 
@@ -102,6 +102,7 @@
       <header class="view-head interview-head">
         <p class="eyebrow" id="q-counter">Question 1 of 6</p>
         <h1 id="q-text">—</h1>
+        <button class="ghost-btn replay-btn" id="replay-btn">🔊 Read question aloud</button>
       </header>
 
       <div class="cam-hero">
@@ -140,9 +141,9 @@
     <!-- ---------- VIEW 3: REPORT ---------- -->
     <section class="view" id="view-report">
       <header class="view-head">
-        <p class="eyebrow">Step 03 — The dossier</p>
+        <p class="eyebrow">Step 03 — Your results</p>
         <h1>How you did.</h1>
-        <p class="lede" id="report-lede">Here's the full breakdown of content, delivery, presence, and pacing across every question.</p>
+        <p class="lede" id="report-lede">Here's the full breakdown of what you said, your speed, and your eye contact — for every question.</p>
       </header>
 
       <div class="report-top">
@@ -157,7 +158,7 @@
           <p class="overall-tag" id="avg-time-tag">—</p>
         </div>
         <div class="card chart-card">
-          <h3>Score profile</h3>
+          <h3>Your scores at a glance</h3>
           <div class="chart-box"><canvas id="radar-chart"></canvas></div>
         </div>
       </div>
@@ -171,6 +172,13 @@
           <h3>Time per question</h3>
           <div class="chart-box chart-box-short"><canvas id="time-chart"></canvas></div>
         </div>
+      </div>
+
+      <div class="card history-card" id="history-card" hidden>
+        <h2>Your attempts this session</h2>
+        <p class="hint">Kept only in this browser tab, so you can compare interviews back to back. Closing the tab clears it.</p>
+        <div class="chart-box chart-box-short" id="history-chart-box" hidden><canvas id="history-chart"></canvas></div>
+        <div id="history-list"></div>
       </div>
 
       <div class="card breakdown-card">

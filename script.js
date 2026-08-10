@@ -36,6 +36,59 @@ const PALETTE = ["#7FA8C9", "#C79A54", "#7FAE8E", "#CE93A0", "#A79BC9", "#E0895F
 const MUTED = "#D8D2C0"; // skipped / empty bars
 
 /* ---------------------------------------------------------------------
+   VOICE — reads each question aloud, repeatable on demand
+--------------------------------------------------------------------- */
+const ttsSupported = "speechSynthesis" in window;
+let cachedVoices = [];
+if (ttsSupported) {
+  const refreshVoices = () => { cachedVoices = window.speechSynthesis.getVoices(); };
+  refreshVoices();
+  window.speechSynthesis.onvoiceschanged = refreshVoices;
+}
+
+function pickVoice() {
+  if (!cachedVoices.length) return null;
+  return cachedVoices.find(v => /Natural|Neural|Online/i.test(v.name)) ||
+         cachedVoices.find(v => /Google/i.test(v.name) && v.lang.startsWith("en")) ||
+         cachedVoices.find(v => v.lang.startsWith("en")) ||
+         cachedVoices[0];
+}
+
+function speakQuestion(text) {
+  if (!ttsSupported) return;
+  window.speechSynthesis.cancel(); // stop anything already playing before starting a new one
+  const utter = new SpeechSynthesisUtterance(text);
+  utter.rate = 0.98;
+  utter.pitch = 1;
+  const voice = pickVoice();
+  if (voice) utter.voice = voice;
+  window.speechSynthesis.speak(utter);
+}
+
+const replayBtn = document.getElementById("replay-btn");
+if (!ttsSupported) {
+  replayBtn.hidden = true;
+} else {
+  replayBtn.addEventListener("click", () => speakQuestion(state.questions[state.currentQ].text));
+}
+
+/* ---------------------------------------------------------------------
+   SESSION HISTORY — kept in sessionStorage, so it survives across
+   interviews in this tab but clears automatically when the tab closes.
+--------------------------------------------------------------------- */
+const HISTORY_KEY = "hrgoggle_session_history";
+function loadHistory() {
+  try { return JSON.parse(sessionStorage.getItem(HISTORY_KEY) || "[]"); }
+  catch (e) { return []; }
+}
+function saveHistoryEntry(entry) {
+  const history = loadHistory();
+  history.push(entry);
+  try { sessionStorage.setItem(HISTORY_KEY, JSON.stringify(history)); }
+  catch (e) { console.warn("Couldn't save session history:", e); }
+}
+
+/* ---------------------------------------------------------------------
    STATE
 --------------------------------------------------------------------- */
 const state = {
@@ -59,9 +112,7 @@ const state = {
   // vision trackers (reset per question)
   frameCount: 0,
   eyeContactFrames: 0,
-  smileFrames: 0,
   liveEyeContact: false,
-  liveSmile: false,
 };
 
 const FILLERS = ["um", "uh", "umm", "uhh", "erm", "you know", "i mean", "like", "actually", "basically"];
@@ -85,6 +136,8 @@ const GENERIC_QUESTIONS = [
   { text: "Describe a time you disagreed with a teammate's technical decision. What did you do?", keywords: ["listened","compromise","discussed","data","team"] },
   { text: "What's a project you're most proud of, and what was your specific contribution?", keywords: ["built","designed","implemented","led","owned"] },
   { text: "How do you approach debugging a problem you've never seen before?", keywords: ["logs","reproduce","isolate","hypothesis","test"] },
+  { text: "Tell me about a time you had to learn something new very quickly. How did you approach it?", keywords: ["learned","researched","practiced","asked","applied"] },
+  { text: "Describe a mistake you made on a project and what you did after realizing it.", keywords: ["mistake","fixed","learned","told","prevented"] },
 ];
 
 /* ---------------------------------------------------------------------
@@ -206,6 +259,8 @@ const SKILL_QUESTION_TEMPLATES = [
     : `Tell me about a specific project where you used ${skill}. What made it non-trivial?`,
   (skill) => `If you rebuilt your ${skill} work today knowing what you know now, what would you change?`,
   (skill) => `Walk me through a bug or failure you hit while working with ${skill}. How did you track it down?`,
+  (skill) => `How did you land on ${skill} over the alternatives for that project? What would've changed your mind?`,
+  (skill) => `What's a trade-off you made somewhere in your ${skill} work — speed vs. correctness, simplicity vs. flexibility?`,
 ];
 
 /* Each main question gets a linked follow-up, asked right after it — but
@@ -214,17 +269,19 @@ const FOLLOWUP_TEMPLATES = [
   () => `Quick follow-up — how would you know if that decision actually paid off?`,
   () => `Follow-up: was there a moment that approach broke down? What did you do?`,
   () => `One more on that — what would you tell someone about to make the same call?`,
+  () => `Follow-up — how did the rest of the team react to that choice?`,
+  () => `And if you had twice the time, what would you have done differently?`,
 ];
 
 function generateQuestionsLocally(text, skills) {
   const questions = [];
-  const usedSkills = skills.slice(0, 3); // 3 skills × (main + follow-up) = 6 grounded questions
+  const usedSkills = shuffle(skills).slice(0, 3); // random 3 skills → main + follow-up each = 6 grounded questions
 
-  usedSkills.forEach((skill, i) => {
+  usedSkills.forEach((skill) => {
     const contextLines = findSkillContextLines(text, skill);
     const context = contextLines[0];
-    const mainTemplate = SKILL_QUESTION_TEMPLATES[i % SKILL_QUESTION_TEMPLATES.length];
-    const followTemplate = FOLLOWUP_TEMPLATES[i % FOLLOWUP_TEMPLATES.length];
+    const mainTemplate = pickRandom(SKILL_QUESTION_TEMPLATES);
+    const followTemplate = pickRandom(FOLLOWUP_TEMPLATES);
     questions.push({
       text: mainTemplate(skill, context),
       keywords: [skill.toLowerCase(), "because", "challenge", "result", "learned"],
@@ -238,10 +295,21 @@ function generateQuestionsLocally(text, skills) {
     });
   });
 
-  // Fill remaining slots with generic behavioral questions (no follow-ups on these)
-  const remaining = GENERIC_QUESTIONS.slice(0, Math.max(1, 7 - questions.length));
+  // Fill remaining slots with generic behavioral questions, order shuffled
+  // so back-to-back interviews don't ask the same ones in the same order.
+  const remaining = shuffle(GENERIC_QUESTIONS).slice(0, Math.max(1, 7 - questions.length));
   return [...questions, ...remaining].slice(0, 7);
 }
+
+function shuffle(arr) {
+  const a = arr.slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+function pickRandom(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
 
 function truncate(s, n) { return s.length > n ? s.slice(0, n).trim() + "…" : s; }
 
@@ -257,6 +325,8 @@ document.getElementById("to-interview-btn").addEventListener("click", async () =
   initSpeechRecognition();
   state.currentQ = 0;
   state.interviewStartTime = Date.now();
+  state.interviewEndTime = null;
+  state.recordedThisAttempt = false;
   loadQuestion(0);
 });
 
@@ -303,33 +373,24 @@ function onFaceResults(results) {
 
   if (!results.multiFaceLandmarks || !results.multiFaceLandmarks.length) {
     state.liveEyeContact = false;
-    state.liveSmile = false;
     return;
   }
   const lm = results.multiFaceLandmarks[0];
 
   // --- Head yaw / gaze proxy: nose tip vs. face-width midpoint ---
+  // This is the only vision signal HRGoggle scores on: are you facing the
+  // camera or not. It does not attempt to classify emotion or expression.
   const leftCheek = lm[234], rightCheek = lm[454], nose = lm[1];
   const faceWidth = Math.abs(rightCheek.x - leftCheek.x) || 0.001;
   const mid = (leftCheek.x + rightCheek.x) / 2;
   const yawRatio = (nose.x - mid) / faceWidth; // ~0 = facing camera
   const lookingAtCamera = Math.abs(yawRatio) < 0.12;
 
-  // --- Smile proxy: mouth corners raised relative to mouth center ---
-  const leftCorner = lm[61], rightCorner = lm[291], upperLip = lm[13], lowerLip = lm[14];
-  const mouthCenterY = (upperLip.y + lowerLip.y) / 2;
-  const cornerY = (leftCorner.y + rightCorner.y) / 2;
-  const mouthWidth = Math.abs(rightCorner.x - leftCorner.x) || 0.001;
-  const smileRatio = (mouthCenterY - cornerY) / mouthWidth; // positive = corners raised = smiling
-  const smiling = smileRatio > 0.02;
-
   state.liveEyeContact = lookingAtCamera;
-  state.liveSmile = smiling;
 
   if (state.recognizing) {
     state.frameCount++;
     if (lookingAtCamera) state.eyeContactFrames++;
-    if (smiling) state.smileFrames++;
   }
 
   drawFaceDot(lm, lookingAtCamera);
@@ -408,9 +469,8 @@ function updateLiveMetrics() {
 function updateLiveDial() {
   if (!state.recognizing) return;
   const eyePct = state.frameCount ? (state.eyeContactFrames / state.frameCount) * 100 : 50;
-  const smilePct = state.frameCount ? (state.smileFrames / state.frameCount) * 100 : 50;
   const fillerPenalty = Math.min(40, state.fillerCount * 6);
-  const score = Math.max(0, Math.min(100, 0.5 * eyePct + 0.3 * smilePct + 0.2 * 100 - fillerPenalty));
+  const score = Math.max(0, Math.min(100, 0.7 * eyePct + 30 - fillerPenalty));
   setDial(score);
 }
 
@@ -443,6 +503,7 @@ function loadQuestion(i) {
   document.getElementById("record-btn").textContent = "Start answer";
   document.getElementById("cam-listening").hidden = true;
   document.getElementById("rec-badge").textContent = "● not recording";
+  speakQuestion(q.text);
 }
 
 function resetPerQuestionState() {
@@ -451,7 +512,6 @@ function resetPerQuestionState() {
   state.fillerCount = 0;
   state.frameCount = 0;
   state.eyeContactFrames = 0;
-  state.smileFrames = 0;
   state.answerStartTime = null;
   setDial(0);
   document.getElementById("m-wpm").textContent = "--";
@@ -465,6 +525,7 @@ document.getElementById("record-btn").addEventListener("click", () => {
 });
 
 function startAnswer() {
+  if (ttsSupported) window.speechSynthesis.cancel(); // don't talk over the person once they start
   state.recognizing = true;
   state.answerStartTime = Date.now();
   document.getElementById("record-btn").textContent = "Finish answer";
@@ -510,18 +571,17 @@ async function recordAnswerResult(skipped = false) {
   const elapsedMin = Math.max(0.05, timeSec / 60);
   const wpm = Math.round(words / elapsedMin);
   const eyePct = state.frameCount ? Math.round((state.eyeContactFrames / state.frameCount) * 100) : 0;
-  const smilePct = state.frameCount ? Math.round((state.smileFrames / state.frameCount) * 100) : 0;
 
   const contentScore = skipped ? 0 : scoreContent(transcript, q.keywords);
   const paceScore = skipped ? 0 : scorePace(wpm, words);
   const fillerScore = skipped ? 0 : scoreFillers(state.fillerCount, words);
-  const deliveryScore = Math.round((paceScore + fillerScore + eyePct + smilePct) / 4);
+  const deliveryScore = Math.round((paceScore + fillerScore + eyePct) / 3);
   const overall = skipped ? 0 : Math.round(0.55 * contentScore + 0.45 * deliveryScore);
 
   state.answers[qIndex] = {
     question: q.text, transcript, skipped, words, wpm, timeSec,
     isFollowUp: !!q.isFollowUp,
-    fillerCount: state.fillerCount, eyePct, smilePct,
+    fillerCount: state.fillerCount, eyePct,
     contentScore, paceScore, fillerScore, deliveryScore, overall,
   };
 }
@@ -567,7 +627,7 @@ function autoSkipOrphanedFollowUp() {
   if (q && q.isFollowUp && prevAnswer && prevAnswer.skipped) {
     state.answers[state.currentQ] = {
       question: q.text, transcript: "", skipped: true, words: 0, wpm: 0, timeSec: 0,
-      isFollowUp: true, fillerCount: 0, eyePct: 0, smilePct: 0,
+      isFollowUp: true, fillerCount: 0, eyePct: 0,
       contentScore: 0, paceScore: 0, fillerScore: 0, deliveryScore: 0, overall: 0
     };
     return true;
@@ -590,10 +650,16 @@ function advanceQuestion() {
   }
 }
 
+function recordSessionHistoryOnce(overall, totalSec, answeredCount) {
+  if (state.recordedThisAttempt) return;
+  state.recordedThisAttempt = true;
+  saveHistoryEntry({ ts: Date.now(), overall, totalSec, answeredCount });
+}
+
 /* ---------------------------------------------------------------------
    REPORT
 --------------------------------------------------------------------- */
-let radarChart, barChart, timeChart;
+let radarChart, barChart, timeChart, historyChart;
 function buildReport() {
   const valid = state.answers.filter(a => a && !a.skipped);
   const overall = valid.length
@@ -615,6 +681,13 @@ function buildReport() {
 
   const avg = (key) => valid.length ? Math.round(valid.reduce((s, a) => s + a[key], 0) / valid.length) : 0;
 
+  // Only log a finished interview to session history once, not on every
+  // manual peek at the report tab mid-interview.
+  if (state.interviewEndTime) {
+    recordSessionHistoryOnce(overall, totalSec, valid.length);
+  }
+  renderHistory(overall);
+
   if (typeof Chart === "undefined") {
     console.error("Chart.js failed to load — skipping charts, rest of the report still works.");
     document.querySelectorAll(".chart-box").forEach(box =>
@@ -628,10 +701,10 @@ function buildReport() {
     radarChart = new Chart(document.getElementById("radar-chart"), {
       type: "radar",
       data: {
-        labels: ["Content", "Eye contact", "Pace", "Low fillers", "Expression"],
+        labels: ["Content", "Eye contact", "Pace", "Low fillers"],
         datasets: [{
           label: "Your score",
-          data: [avg("contentScore"), avg("eyePct"), avg("paceScore"), avg("fillerScore"), avg("smilePct")],
+          data: [avg("contentScore"), avg("eyePct"), avg("paceScore"), avg("fillerScore")],
           backgroundColor: "rgba(127,168,201,0.28)",
           borderColor: PALETTE[0],
           pointBackgroundColor: PALETTE[1],
@@ -714,6 +787,48 @@ function buildReport() {
   }).join("");
 }
 
+function renderHistory(currentOverall) {
+  const history = loadHistory();
+  const historyCard = document.getElementById("history-card");
+  if (!history.length) { historyCard.hidden = true; return; }
+  historyCard.hidden = false;
+
+  const list = document.getElementById("history-list");
+  list.innerHTML = history.slice().reverse().map((h, idx) => {
+    const isCurrent = idx === 0; // most recent entry shown first
+    const time = new Date(h.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    return `
+      <div class="history-row ${isCurrent ? "is-current" : ""}">
+        <span>${isCurrent ? "This attempt" : "Earlier attempt"} · <span class="history-time">${time}</span></span>
+        <span class="history-score">${h.overall}/100 · ${formatTime(h.totalSec)}</span>
+      </div>`;
+  }).join("");
+
+  const chartBox = document.getElementById("history-chart-box");
+  if (history.length < 2 || typeof Chart === "undefined") { chartBox.hidden = true; return; }
+  chartBox.hidden = false;
+  if (historyChart) historyChart.destroy();
+  historyChart = new Chart(document.getElementById("history-chart"), {
+    type: "line",
+    data: {
+      labels: history.map((h, i) => `Attempt ${i + 1}`),
+      datasets: [{
+        label: "Overall score",
+        data: history.map(h => h.overall),
+        borderColor: PALETTE[0],
+        backgroundColor: PALETTE[0],
+        tension: 0.3,
+        pointRadius: 5
+      }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      scales: { y: { min: 0, max: 100 } },
+      plugins: { legend: { display: false } }
+    }
+  });
+}
+
 function ruleBasedFeedback(a) {
   const notes = [];
   if (a.eyePct < 50) notes.push("you looked away from the camera often — practice anchoring on the lens, not the screen");
@@ -730,7 +845,34 @@ function ruleBasedFeedback(a) {
 }
 
 document.getElementById("print-btn").addEventListener("click", () => window.print());
-document.getElementById("restart-btn").addEventListener("click", () => location.reload());
+document.getElementById("restart-btn").addEventListener("click", () => {
+  // Reset in place (not a full page reload) so sessionStorage history survives.
+  if (ttsSupported) window.speechSynthesis.cancel();
+  if (recognition) { try { recognition.stop(); } catch (e) {} }
+  state.recognizing = false;
+  if (camera) { try { camera.stop(); } catch (e) {} }
+  if (videoEl.srcObject) {
+    videoEl.srcObject.getTracks().forEach(t => t.stop());
+    videoEl.srcObject = null;
+  }
+
+  state.resumeText = "";
+  state.skills = [];
+  state.questions = [];
+  state.currentQ = 0;
+  state.answers = [];
+  state.interviewStartTime = null;
+  state.interviewEndTime = null;
+  state.recordedThisAttempt = false;
+
+  resumeInput.value = "";
+  document.getElementById("dz-filename").textContent = "";
+  document.getElementById("ready-status").hidden = true;
+  document.getElementById("to-interview-btn").disabled = true;
+  document.querySelectorAll('.rail-step[data-view="interview"], .rail-step[data-view="report"]')
+    .forEach(s => s.disabled = true);
+  goToView("setup");
+});
 
 /* ---------------------------------------------------------------------
    UTIL
