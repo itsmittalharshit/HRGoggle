@@ -4,8 +4,12 @@
    speech-to-text (Web Speech API), and rule-based / optional-LLM scoring.
    ========================================================================= */
 
-pdfjsLib.GlobalWorkerOptions.workerSrc =
-  "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.worker.min.js";
+if (typeof pdfjsLib !== "undefined") {
+  pdfjsLib.GlobalWorkerOptions.workerSrc =
+    "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+} else {
+  console.error("pdf.js failed to load from CDN — resume upload will not work until this is fixed.");
+}
 
 /* ---------------------------------------------------------------------
    STATE
@@ -92,6 +96,12 @@ dropzone.addEventListener("drop", (e) => {
 
 async function handleResumeFile(file) {
   document.getElementById("dz-filename").textContent = file.name;
+
+  if (typeof pdfjsLib === "undefined") {
+    alert("The PDF reader library didn't load (likely a slow connection or a blocked CDN). Refresh the page and try again.");
+    return;
+  }
+
   document.getElementById("parse-status").hidden = false;
 
   try {
