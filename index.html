@@ -25,7 +25,7 @@
     <nav class="rail-steps" id="rail-steps">
       <button class="rail-step is-active" data-view="setup">
         <span class="rail-step-num">01</span>
-        <span class="rail-step-label">Case File<br><small>Upload &amp; questions</small></span>
+        <span class="rail-step-label">Welcome<br><small>Upload resume</small></span>
       </button>
       <button class="rail-step" data-view="interview" disabled>
         <span class="rail-step-num">02</span>
@@ -38,22 +38,61 @@
     </nav>
 
     <div class="rail-foot">
+      <button class="rail-settings-btn" id="settings-btn">⚙ Settings</button>
       <p>Runs entirely in your browser. Nothing is uploaded to a server.</p>
     </div>
   </aside>
 
+  <!-- ============ SETTINGS OVERLAY ============ -->
+  <div class="overlay" id="settings-overlay" hidden>
+    <div class="overlay-card">
+      <div class="overlay-head">
+        <h2>Settings</h2>
+        <button class="icon-btn" id="settings-close">✕</button>
+      </div>
+      <p class="hint">Optional. Paste an OpenAI API key to generate richer, resume-grounded questions and short written feedback instead of the built-in keyword matching. The key stays in this browser tab only (saved to localStorage) and is sent directly from your browser to OpenAI — fine for local testing, <strong>do not use this on a publicly shared copy of the site</strong>, since the key would be visible to anyone who opens dev tools.</p>
+      <input type="password" id="api-key-input" placeholder="sk-...">
+      <button class="ghost-btn" id="save-key-btn">Save key for this browser</button>
+      <p class="hint" id="key-status"></p>
+    </div>
+  </div>
+
   <!-- ============ MAIN ============ -->
   <main class="stage">
 
-    <!-- ---------- VIEW 1: SETUP ---------- -->
+    <!-- ---------- VIEW 1: WELCOME / MARKETING + UPLOAD ---------- -->
     <section class="view is-active" id="view-setup">
-      <header class="view-head">
-        <p class="eyebrow">Step 01 — Open a case file</p>
-        <h1>Let's build your interview.</h1>
-        <p class="lede">Upload your resume as a PDF. HRGoggle reads it, pulls out your skills and projects, and writes questions aimed at the specific things you've built.</p>
+      <header class="hero">
+        <p class="eyebrow">Multimodal AI mock interview coach</p>
+        <h1>See exactly how you come across —<br>before it matters.</h1>
+        <p class="lede">HRGoggle reads your resume, writes questions aimed at the actual things you've built, then watches and listens while you answer on camera. You get a scored report on what you said, how you said it, and how you looked saying it — all running in your browser, nothing uploaded anywhere.</p>
       </header>
 
+      <div class="feature-grid">
+        <div class="feature-card feature-a">
+          <p class="feature-icon">📄</p>
+          <h3>Resume-aware questions</h3>
+          <p>Your PDF is parsed for real skills and project lines, and the questions are written to reference them directly — with natural follow-ups, not a generic bank.</p>
+        </div>
+        <div class="feature-card feature-b">
+          <p class="feature-icon">👁</p>
+          <h3>Live vision tracking</h3>
+          <p>Face-mesh tracking reads eye contact and expression frame-by-frame while you answer, feeding a live confidence dial.</p>
+        </div>
+        <div class="feature-card feature-c">
+          <p class="feature-icon">🎙</p>
+          <h3>Speech &amp; timing analytics</h3>
+          <p>Pace, filler words, and time spent per question are measured as you talk and rolled into a clarity read on each answer.</p>
+        </div>
+        <div class="feature-card feature-d">
+          <p class="feature-icon">📊</p>
+          <h3>Scored dossier</h3>
+          <p>A multi-chart report breaks down content, delivery, presence, and pacing — question by question and overall.</p>
+        </div>
+      </div>
+
       <div class="card upload-card">
+        <h2 class="upload-title">Start with your resume</h2>
         <div class="dropzone" id="dropzone">
           <input type="file" id="resume-input" accept="application/pdf" hidden>
           <p class="dz-icon">📄</p>
@@ -64,27 +103,11 @@
 
         <div class="parse-status" id="parse-status" hidden>
           <div class="spinner"></div>
-          <span>Reading resume…</span>
+          <span>Reading your resume and writing questions…</span>
         </div>
+
+        <p class="ready-status" id="ready-status" hidden>✓ Resume analyzed — your questions are ready.</p>
       </div>
-
-      <div class="card extracted-card" id="extracted-card" hidden>
-        <h2>What we found</h2>
-        <div class="chip-row" id="skill-chips"></div>
-
-        <h2>Your interview questions</h2>
-        <p class="hint">These are generated from your resume. Edit or remove any before you start.</p>
-        <ol class="question-list" id="question-list"></ol>
-        <button class="ghost-btn" id="add-question-btn">+ Add a question</button>
-      </div>
-
-      <details class="card advanced-card">
-        <summary>Advanced — connect an LLM for sharper questions &amp; scoring</summary>
-        <p class="hint">Optional. Paste an OpenAI API key to generate richer follow-up questions and semantic-similarity scoring instead of the built-in keyword matching. The key stays in this browser tab only (saved to localStorage) and is sent directly from your browser to OpenAI — fine for local testing, <strong>do not use this on a publicly deployed copy of the site</strong> since the key would be visible to anyone.</p>
-        <input type="password" id="api-key-input" placeholder="sk-...">
-        <button class="ghost-btn" id="save-key-btn">Save key for this browser</button>
-        <p class="hint" id="key-status"></p>
-      </details>
 
       <button class="primary-btn start-btn" id="to-interview-btn" disabled>Begin interview →</button>
     </section>
@@ -96,41 +119,35 @@
         <h1 id="q-text">—</h1>
       </header>
 
-      <div class="interview-grid">
+      <div class="cam-hero">
+        <video id="webcam" autoplay muted playsinline></video>
+        <canvas id="overlay"></canvas>
+        <div class="cam-badge" id="rec-badge">● not recording</div>
+        <div class="cam-listening" id="cam-listening" hidden>
+          <span class="pulse-dot"></span> listening…
+        </div>
+      </div>
 
-        <div class="cam-col">
-          <div class="cam-frame">
-            <video id="webcam" autoplay muted playsinline></video>
-            <canvas id="overlay"></canvas>
-            <div class="cam-badge" id="rec-badge">● not recording</div>
-          </div>
-
-          <div class="dial-wrap">
-            <svg viewBox="0 0 200 110" class="dial">
-              <path d="M10,100 A90,90 0 0 1 190,100" class="dial-track"/>
-              <path d="M10,100 A90,90 0 0 1 190,100" class="dial-fill" id="dial-fill"/>
-              <text x="100" y="90" class="dial-num" id="dial-num">--</text>
-            </svg>
-            <p class="dial-label">Live confidence signal</p>
-          </div>
-
-          <div class="live-metrics">
-            <div><span id="m-eye">--</span><label>Eye contact</label></div>
-            <div><span id="m-wpm">--</span><label>Words / min</label></div>
-            <div><span id="m-filler">--</span><label>Filler words</label></div>
-          </div>
+      <div class="interview-bar">
+        <div class="dial-wrap">
+          <svg viewBox="0 0 200 110" class="dial">
+            <path d="M10,100 A90,90 0 0 1 190,100" class="dial-track"/>
+            <path d="M10,100 A90,90 0 0 1 190,100" class="dial-fill" id="dial-fill"/>
+            <text x="100" y="90" class="dial-num" id="dial-num">--</text>
+          </svg>
+          <p class="dial-label">Live confidence</p>
         </div>
 
-        <div class="answer-col">
-          <div class="card transcript-card">
-            <h2>Your answer <span class="live-dot" id="live-dot"></span></h2>
-            <div class="transcript" id="transcript">Press <strong>Start Answer</strong> and speak — your words will appear here.</div>
-          </div>
+        <div class="live-metrics">
+          <div><span id="m-eye">--</span><label>Eye contact</label></div>
+          <div><span id="m-wpm">--</span><label>Words / min</label></div>
+          <div><span id="m-filler">--</span><label>Fillers</label></div>
+          <div><span id="m-time">0:00</span><label>Time on this Q</label></div>
+        </div>
 
-          <div class="controls-row">
-            <button class="primary-btn" id="record-btn">Start answer</button>
-            <button class="ghost-btn" id="skip-btn">Skip question →</button>
-          </div>
+        <div class="controls-row">
+          <button class="primary-btn" id="record-btn">Start answer</button>
+          <button class="ghost-btn" id="skip-btn">Skip question →</button>
         </div>
       </div>
     </section>
@@ -140,7 +157,7 @@
       <header class="view-head">
         <p class="eyebrow">Step 03 — The dossier</p>
         <h1>How you did.</h1>
-        <p class="lede" id="report-lede">Here's the full breakdown of content, delivery, and presence across every question.</p>
+        <p class="lede" id="report-lede">Here's the full breakdown of content, delivery, presence, and pacing across every question.</p>
       </header>
 
       <div class="report-top">
@@ -149,8 +166,25 @@
           <p class="overall-num" id="overall-score">--</p>
           <p class="overall-tag" id="overall-tag">—</p>
         </div>
-        <div class="card radar-card">
-          <canvas id="radar-chart"></canvas>
+        <div class="card time-card">
+          <p class="overall-label">Total time spent</p>
+          <p class="overall-num" id="total-time">--</p>
+          <p class="overall-tag" id="avg-time-tag">—</p>
+        </div>
+        <div class="card chart-card">
+          <h3>Score profile</h3>
+          <div class="chart-box"><canvas id="radar-chart"></canvas></div>
+        </div>
+      </div>
+
+      <div class="report-mid">
+        <div class="card chart-card">
+          <h3>Score by question</h3>
+          <div class="chart-box chart-box-short"><canvas id="bar-chart"></canvas></div>
+        </div>
+        <div class="card chart-card">
+          <h3>Time per question</h3>
+          <div class="chart-box chart-box-short"><canvas id="time-chart"></canvas></div>
         </div>
       </div>
 

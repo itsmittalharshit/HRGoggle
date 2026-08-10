@@ -31,16 +31,23 @@ function ensurePdfWorker() {
   return pdfWorkerReady;
 }
 
+/* Multi-color palette used across all charts — light, distinct, not just a two-tone scheme */
+const PALETTE = ["#7FA8C9", "#C79A54", "#7FAE8E", "#CE93A0", "#A79BC9", "#E0895F", "#6FA8A0", "#D9B25C"];
+const MUTED = "#D8D2C0"; // skipped / empty bars
+
 /* ---------------------------------------------------------------------
    STATE
 --------------------------------------------------------------------- */
 const state = {
   resumeText: "",
   skills: [],
-  questions: [],      // [{ text, keywords }]
+  questions: [],      // [{ text, keywords, isFollowUp?, skill? }]
   currentQ: 0,
   answers: [],         // per-question results
   apiKey: localStorage.getItem("hrgoggle_key") || "",
+
+  interviewStartTime: null,
+  interviewEndTime: null,
 
   // live interview trackers
   recognizing: false,
@@ -48,8 +55,6 @@ const state = {
   transcriptInterim: "",
   answerStartTime: null,
   lastSpeechTime: null,
-  pauseCount: 0,
-  silenceMs: 0,
   fillerCount: 0,
 
   // vision trackers (reset per question)
@@ -81,7 +86,6 @@ const GENERIC_QUESTIONS = [
   { text: "Describe a time you disagreed with a teammate's technical decision. What did you do?", keywords: ["listened","compromise","discussed","data","team"] },
   { text: "What's a project you're most proud of, and what was your specific contribution?", keywords: ["built","designed","implemented","led","owned"] },
   { text: "How do you approach debugging a problem you've never seen before?", keywords: ["logs","reproduce","isolate","hypothesis","test"] },
-  { text: "Where do you want to be in your career three years from now?", keywords: [] },
 ];
 
 /* ---------------------------------------------------------------------
@@ -99,15 +103,32 @@ document.querySelectorAll(".rail-step").forEach(btn => {
   btn.addEventListener("click", () => {
     if (btn.disabled) return;
     const view = btn.dataset.view;
-    // Manual escape hatch: if the person jumps to the report tab directly
-    // (interview stalled, or they just want to stop early), build the
-    // report from whatever answers exist so far rather than doing nothing.
+    // Manual escape hatch: jumping to the report tab builds it from whatever
+    // answers exist so far, so it's never a dead end.
     if (view === "report") {
       if (state.recognizing) finishAnswer();
       try { buildReport(); } catch (e) { console.error("buildReport failed:", e); }
     }
     goToView(view);
   });
+});
+
+/* ---------------------------------------------------------------------
+   SETTINGS OVERLAY (OpenAI key — optional, tucked away from the main flow)
+--------------------------------------------------------------------- */
+const settingsOverlay = document.getElementById("settings-overlay");
+document.getElementById("settings-btn").addEventListener("click", () => { settingsOverlay.hidden = false; });
+document.getElementById("settings-close").addEventListener("click", () => { settingsOverlay.hidden = true; });
+settingsOverlay.addEventListener("click", (e) => { if (e.target === settingsOverlay) settingsOverlay.hidden = true; });
+
+const keyInput = document.getElementById("api-key-input");
+keyInput.value = state.apiKey;
+document.getElementById("save-key-btn").addEventListener("click", () => {
+  state.apiKey = keyInput.value.trim();
+  localStorage.setItem("hrgoggle_key", state.apiKey);
+  document.getElementById("key-status").textContent = state.apiKey
+    ? "Key saved for this browser. New question generation will use it."
+    : "Key cleared — using local keyword-based generation.";
 });
 
 /* ---------------------------------------------------------------------
@@ -138,6 +159,7 @@ async function handleResumeFile(file) {
   }
 
   document.getElementById("parse-status").hidden = false;
+  document.getElementById("ready-status").hidden = true;
 
   try {
     await ensurePdfWorker();
@@ -174,7 +196,12 @@ async function buildInterviewFromResume(text) {
   }
 
   document.getElementById("parse-status").hidden = true;
-  renderExtracted();
+  const readyEl = document.getElementById("ready-status");
+  const followUps = state.questions.filter(q => q.isFollowUp).length;
+  readyEl.textContent = `✓ Resume analyzed — ${state.questions.length} questions ready` +
+    (followUps ? ` (including ${followUps} follow-up${followUps > 1 ? "s" : ""}).` : ".");
+  readyEl.hidden = false;
+  document.getElementById("to-interview-btn").disabled = false;
 }
 
 function extractSkills(text) {
@@ -200,34 +227,49 @@ function findSkillContextLines(text, skill) {
   );
 }
 
-/* Several distinct angles per skill, so a 5-skill resume doesn't produce
-   the same sentence five times with the noun swapped. */
+/* Several distinct angles per skill, so a multi-skill resume doesn't produce
+   the same sentence repeatedly with the noun swapped. */
 const SKILL_QUESTION_TEMPLATES = [
   (skill, ctx) => ctx
     ? `You mentioned "${truncate(ctx, 100)}" — what was the hardest technical decision in that piece, and why did you go that way?`
     : `Tell me about a specific project where you used ${skill}. What made it non-trivial?`,
   (skill) => `If you rebuilt your ${skill} work today knowing what you know now, what would you change?`,
   (skill) => `Walk me through a bug or failure you hit while working with ${skill}. How did you track it down?`,
-  (skill) => `How did you land on ${skill} over the alternatives for that project? What would've changed your mind?`,
-  (skill) => `What's a trade-off you made somewhere in your ${skill} work — speed vs. correctness, simplicity vs. flexibility, that kind of thing?`,
-  (skill) => `Someone on the team disagrees with how you used ${skill} there. How would you defend that decision?`
+];
+
+/* Each main question gets a linked follow-up, asked right after it — but
+   only if the main question wasn't skipped. */
+const FOLLOWUP_TEMPLATES = [
+  () => `Quick follow-up — how would you know if that decision actually paid off?`,
+  () => `Follow-up: was there a moment that approach broke down? What did you do?`,
+  () => `One more on that — what would you tell someone about to make the same call?`,
 ];
 
 function generateQuestionsLocally(text, skills) {
   const questions = [];
-  const usedSkills = skills.slice(0, 5); // cap so the interview stays a reasonable length
+  const usedSkills = skills.slice(0, 3); // 3 skills × (main + follow-up) = 6 grounded questions
 
   usedSkills.forEach((skill, i) => {
     const contextLines = findSkillContextLines(text, skill);
     const context = contextLines[0];
-    const template = SKILL_QUESTION_TEMPLATES[i % SKILL_QUESTION_TEMPLATES.length];
-    const q = template(skill, context);
-    questions.push({ text: q, keywords: [skill.toLowerCase(), "because","challenge","result","learned"] });
+    const mainTemplate = SKILL_QUESTION_TEMPLATES[i % SKILL_QUESTION_TEMPLATES.length];
+    const followTemplate = FOLLOWUP_TEMPLATES[i % FOLLOWUP_TEMPLATES.length];
+    questions.push({
+      text: mainTemplate(skill, context),
+      keywords: [skill.toLowerCase(), "because", "challenge", "result", "learned"],
+      skill
+    });
+    questions.push({
+      text: followTemplate(),
+      keywords: [skill.toLowerCase(), "impact", "measure", "outcome"],
+      isFollowUp: true,
+      skill
+    });
   });
 
-  // Fill remaining slots with generic behavioral questions
-  const remaining = GENERIC_QUESTIONS.slice(0, Math.max(2, 6 - questions.length));
-  return [...questions, ...remaining].slice(0, 6);
+  // Fill remaining slots with generic behavioral questions (no follow-ups on these)
+  const remaining = GENERIC_QUESTIONS.slice(0, Math.max(1, 7 - questions.length));
+  return [...questions, ...remaining].slice(0, 7);
 }
 
 function truncate(s, n) { return s.length > n ? s.slice(0, n).trim() + "…" : s; }
@@ -255,14 +297,20 @@ async function callOpenAI(messages, jsonMode = false) {
 }
 
 async function generateQuestionsWithLLM(resumeText, skills) {
-  const prompt = `You are a technical interviewer. Given this resume text, write 6 interview questions
-specific to the candidate's actual projects and skills (not generic). For each question also give 4-6
-short keywords that a strong answer would likely include (for scoring). Resume:
+  const prompt = `You are a technical interviewer. Given this resume text, write 4 main interview questions
+specific to the candidate's actual projects and skills (not generic), and for each main question also write
+one short natural spoken follow-up question that only makes sense if the main one was answered. For each
+question give 4-6 short keywords a strong answer would likely include (for scoring). Resume:
 """${resumeText.slice(0, 6000)}"""
-Respond ONLY with JSON: {"questions":[{"text":"...","keywords":["...","..."]}]}`;
+Respond ONLY with JSON:
+{"questions":[
+  {"text":"...","keywords":["...","..."],"isFollowUp":false},
+  {"text":"...","keywords":["...","..."],"isFollowUp":true}
+]}
+List each main question immediately followed by its follow-up, in that order.`;
   const content = await callOpenAI([{ role: "user", content: prompt }], true);
   const parsed = JSON.parse(content);
-  return parsed.questions.slice(0, 6);
+  return parsed.questions.slice(0, 8);
 }
 
 async function getLLMFeedback(question, transcript) {
@@ -271,59 +319,6 @@ Candidate's spoken answer (transcribed): "${transcript}"
 In 2 short sentences, give direct, specific, encouraging-but-honest feedback on the content of this answer.`;
   return callOpenAI([{ role: "user", content: prompt }]);
 }
-
-/* ---------------------------------------------------------------------
-   RENDER: extracted skills + editable question list
---------------------------------------------------------------------- */
-function renderExtracted() {
-  const card = document.getElementById("extracted-card");
-  card.hidden = false;
-
-  const chipRow = document.getElementById("skill-chips");
-  chipRow.innerHTML = state.skills.length
-    ? state.skills.map(s => `<span class="chip">${escapeHtml(s)}</span>`).join("")
-    : `<span class="chip">No known tech keywords detected — using general questions</span>`;
-
-  renderQuestionList();
-  document.getElementById("to-interview-btn").disabled = false;
-}
-
-function renderQuestionList() {
-  const list = document.getElementById("question-list");
-  list.innerHTML = "";
-  state.questions.forEach((q, i) => {
-    const li = document.createElement("li");
-    li.innerHTML = `
-      <textarea data-idx="${i}">${escapeHtml(q.text)}</textarea>
-      <div class="q-tools"><button class="q-remove" data-idx="${i}">remove</button></div>`;
-    list.appendChild(li);
-  });
-  list.querySelectorAll("textarea").forEach(t =>
-    t.addEventListener("input", (e) => state.questions[e.target.dataset.idx].text = e.target.value));
-  list.querySelectorAll(".q-remove").forEach(b =>
-    b.addEventListener("click", (e) => {
-      state.questions.splice(e.target.dataset.idx, 1);
-      renderQuestionList();
-    }));
-}
-
-document.getElementById("add-question-btn").addEventListener("click", () => {
-  state.questions.push({ text: "New question — edit me", keywords: [] });
-  renderQuestionList();
-});
-
-/* ---------------------------------------------------------------------
-   API KEY (optional)
---------------------------------------------------------------------- */
-const keyInput = document.getElementById("api-key-input");
-keyInput.value = state.apiKey;
-document.getElementById("save-key-btn").addEventListener("click", () => {
-  state.apiKey = keyInput.value.trim();
-  localStorage.setItem("hrgoggle_key", state.apiKey);
-  document.getElementById("key-status").textContent = state.apiKey
-    ? "Key saved for this browser. New question generation will use it."
-    : "Key cleared — using local keyword-based generation.";
-});
 
 /* ---------------------------------------------------------------------
    START INTERVIEW
@@ -336,6 +331,7 @@ document.getElementById("to-interview-btn").addEventListener("click", async () =
   await initWebcamAndVision();
   initSpeechRecognition();
   state.currentQ = 0;
+  state.interviewStartTime = Date.now();
   loadQuestion(0);
 });
 
@@ -419,12 +415,14 @@ function drawFaceDot(lm, ok) {
   const p = lm[1];
   octx.beginPath();
   octx.arc(p.x * overlay.width, p.y * overlay.height, 6, 0, Math.PI * 2);
-  octx.fillStyle = ok ? "#5F8768" : "#B24E3C";
+  octx.fillStyle = ok ? "#7FAE8E" : "#CE93A0";
   octx.fill();
 }
 
 /* ---------------------------------------------------------------------
    SPEECH RECOGNITION (audio + data-science pillar)
+   Note: the raw transcript is still captured for scoring, it's just not
+   rendered on screen anymore — only the derived metrics are shown live.
 --------------------------------------------------------------------- */
 let recognition;
 function initSpeechRecognition() {
@@ -448,7 +446,7 @@ function initSpeechRecognition() {
     state.transcriptInterim = interim;
     state.lastSpeechTime = Date.now();
     countFillers(state.transcriptFinal + " " + interim);
-    renderTranscript();
+    updateLiveMetrics();
   };
   recognition.onerror = (e) => console.warn("Speech recognition error:", e.error);
   recognition.onend = () => { if (state.recognizing) recognition.start(); }; // auto-restart while active
@@ -465,25 +463,19 @@ function countFillers(text) {
   state.fillerCount = count;
 }
 
-function renderTranscript() {
-  const el = document.getElementById("transcript");
-  el.innerHTML = escapeHtml(state.transcriptFinal) +
-    `<span style="color:#8a94a0">${escapeHtml(state.transcriptInterim)}</span>`;
-  el.scrollTop = el.scrollHeight;
-  updateLiveMetrics();
-}
-
 /* ---------------------------------------------------------------------
    LIVE METRICS + DIAL
 --------------------------------------------------------------------- */
 let metricsTimer;
 function updateLiveMetrics() {
   const words = wordCount(state.transcriptFinal + " " + state.transcriptInterim);
-  const elapsedMin = state.answerStartTime ? (Date.now() - state.answerStartTime) / 60000 : 0;
+  const elapsedSec = state.answerStartTime ? (Date.now() - state.answerStartTime) / 1000 : 0;
+  const elapsedMin = elapsedSec / 60;
   const wpm = elapsedMin > 0.05 ? Math.round(words / elapsedMin) : 0;
 
   document.getElementById("m-wpm").textContent = wpm || "--";
   document.getElementById("m-filler").textContent = state.fillerCount;
+  document.getElementById("m-time").textContent = formatTime(elapsedSec);
   const eyePct = state.frameCount ? Math.round((state.eyeContactFrames / state.frameCount) * 100) : 0;
   document.getElementById("m-eye").textContent = state.recognizing ? `${eyePct}%` : "--";
 }
@@ -502,23 +494,29 @@ function setDial(score) {
   const offset = circumference - (circumference * score) / 100;
   document.getElementById("dial-fill").style.strokeDashoffset = offset;
   document.getElementById("dial-fill").style.stroke =
-    score >= 70 ? "#5F8768" : score >= 45 ? "#B8905A" : "#B24E3C";
+    score >= 70 ? "#7FAE8E" : score >= 45 ? "#C79A54" : "#CE93A0";
   document.getElementById("dial-num").textContent = Math.round(score);
 }
 
 function wordCount(s) { return (s.trim().match(/\S+/g) || []).length; }
+function formatTime(totalSec) {
+  const s = Math.max(0, Math.round(totalSec));
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  return `${m}:${String(r).padStart(2, "0")}`;
+}
 
 /* ---------------------------------------------------------------------
    INTERVIEW FLOW
 --------------------------------------------------------------------- */
 function loadQuestion(i) {
   const q = state.questions[i];
-  document.getElementById("q-counter").textContent = `Question ${i + 1} of ${state.questions.length}`;
+  document.getElementById("q-counter").textContent =
+    `Question ${i + 1} of ${state.questions.length}` + (q.isFollowUp ? " · follow-up" : "");
   document.getElementById("q-text").textContent = q.text;
   resetPerQuestionState();
-  renderTranscript();
   document.getElementById("record-btn").textContent = "Start answer";
-  document.getElementById("live-dot").classList.remove("is-live");
+  document.getElementById("cam-listening").hidden = true;
   document.getElementById("rec-badge").textContent = "● not recording";
 }
 
@@ -534,6 +532,7 @@ function resetPerQuestionState() {
   document.getElementById("m-wpm").textContent = "--";
   document.getElementById("m-filler").textContent = "--";
   document.getElementById("m-eye").textContent = "--";
+  document.getElementById("m-time").textContent = "0:00";
 }
 
 document.getElementById("record-btn").addEventListener("click", () => {
@@ -544,7 +543,7 @@ function startAnswer() {
   state.recognizing = true;
   state.answerStartTime = Date.now();
   document.getElementById("record-btn").textContent = "Finish answer";
-  document.getElementById("live-dot").classList.add("is-live");
+  document.getElementById("cam-listening").hidden = false;
   document.getElementById("rec-badge").textContent = "● recording";
   metricsTimer = setInterval(updateLiveMetrics, 1000);
   try { recognition && recognition.start(); } catch (e) {}
@@ -555,6 +554,7 @@ async function finishAnswer() {
   clearInterval(metricsTimer);
   try { recognition && recognition.stop(); } catch (e) {}
   document.getElementById("rec-badge").textContent = "● not recording";
+  document.getElementById("cam-listening").hidden = true;
   // Web Speech API often delivers the last "final" result asynchronously,
   // shortly after stop() is called — give it a moment before we score.
   await new Promise(r => setTimeout(r, 350));
@@ -581,7 +581,8 @@ async function recordAnswerResult(skipped = false) {
   // on transcriptFinal alone can drop the last sentence someone just said.
   const transcript = (state.transcriptFinal + " " + state.transcriptInterim).trim();
   const words = wordCount(transcript);
-  const elapsedMin = state.answerStartTime ? Math.max(0.05, (Date.now() - state.answerStartTime) / 60000) : 0.05;
+  const timeSec = state.answerStartTime ? (Date.now() - state.answerStartTime) / 1000 : 0;
+  const elapsedMin = Math.max(0.05, timeSec / 60);
   const wpm = Math.round(words / elapsedMin);
   const eyePct = state.frameCount ? Math.round((state.eyeContactFrames / state.frameCount) * 100) : 0;
   const smilePct = state.frameCount ? Math.round((state.smileFrames / state.frameCount) * 100) : 0;
@@ -593,7 +594,8 @@ async function recordAnswerResult(skipped = false) {
   const overall = skipped ? 0 : Math.round(0.55 * contentScore + 0.45 * deliveryScore);
 
   state.answers[qIndex] = {
-    question: q.text, transcript, skipped, words, wpm,
+    question: q.text, transcript, skipped, words, wpm, timeSec,
+    isFollowUp: !!q.isFollowUp,
     fillerCount: state.fillerCount, eyePct, smilePct,
     contentScore, paceScore, fillerScore, deliveryScore, overall,
     llmFeedback: null
@@ -630,11 +632,42 @@ function scoreFillers(count, words) {
   return Math.max(0, Math.round(100 - rate * 8));
 }
 
+function clarityLabel(a) {
+  if (a.skipped) return "—";
+  if (a.words < 6) return "Too brief";
+  if (a.wpm > 175) return "Rushed";
+  if (a.wpm < 95) return "Hesitant";
+  if (a.fillerCount > 5) return "Cluttered";
+  if (a.paceScore >= 80 && a.fillerScore >= 80) return "Clear & steady";
+  return "Adequate";
+}
+
+/* Auto-skip a follow-up without ever showing it, when its main question
+   was skipped — records it silently and returns true if it advanced. */
+function autoSkipOrphanedFollowUp() {
+  const q = state.questions[state.currentQ];
+  const prevAnswer = state.answers[state.currentQ - 1];
+  if (q && q.isFollowUp && prevAnswer && prevAnswer.skipped) {
+    state.answers[state.currentQ] = {
+      question: q.text, transcript: "", skipped: true, words: 0, wpm: 0, timeSec: 0,
+      isFollowUp: true, fillerCount: 0, eyePct: 0, smilePct: 0,
+      contentScore: 0, paceScore: 0, fillerScore: 0, deliveryScore: 0, overall: 0,
+      llmFeedback: null
+    };
+    return true;
+  }
+  return false;
+}
+
 function advanceQuestion() {
   state.currentQ++;
+  while (state.currentQ < state.questions.length && autoSkipOrphanedFollowUp()) {
+    state.currentQ++;
+  }
   if (state.currentQ < state.questions.length) {
     loadQuestion(state.currentQ);
   } else {
+    state.interviewEndTime = Date.now();
     if (camera) { try { camera.stop(); } catch (e) { console.warn(e); } }
     try { buildReport(); } catch (e) { console.error("buildReport failed, showing report anyway:", e); }
     goToView("report"); // always reachable, even if scoring/chart rendering hit an error above
@@ -644,7 +677,7 @@ function advanceQuestion() {
 /* ---------------------------------------------------------------------
    REPORT
 --------------------------------------------------------------------- */
-let radarChart;
+let radarChart, barChart, timeChart;
 function buildReport() {
   const valid = state.answers.filter(a => a && !a.skipped);
   const overall = valid.length
@@ -656,29 +689,82 @@ function buildReport() {
     overall >= 60 ? "Solid, with room to sharpen" :
     overall >= 35 ? "Needs focused practice" : "Let's build from the fundamentals";
 
-  const avg = (key) => valid.length ? Math.round(valid.reduce((s, a) => s + a[key], 0) / valid.length) : 0;
-  const radarData = {
-    labels: ["Content accuracy", "Eye contact", "Speech pace", "Low filler rate", "Expression"],
-    datasets: [{
-      label: "Your score",
-      data: [avg("contentScore"), avg("eyePct"), avg("paceScore"), avg("fillerScore"), avg("smilePct")],
-      backgroundColor: "rgba(184,144,90,0.25)",
-      borderColor: "#B8905A",
-      pointBackgroundColor: "#2E4A66"
-    }]
-  };
+  // --- Timing stats ---
+  const totalSec = state.interviewStartTime
+    ? ((state.interviewEndTime || Date.now()) - state.interviewStartTime) / 1000 : 0;
+  const avgSec = valid.length ? valid.reduce((s, a) => s + a.timeSec, 0) / valid.length : 0;
+  document.getElementById("total-time").textContent = formatTime(totalSec);
+  document.getElementById("avg-time-tag").textContent =
+    valid.length ? `~${formatTime(avgSec)} avg per answer` : "No answers recorded";
 
-  if (radarChart) radarChart.destroy();
+  const avg = (key) => valid.length ? Math.round(valid.reduce((s, a) => s + a[key], 0) / valid.length) : 0;
+
   if (typeof Chart === "undefined") {
-    console.error("Chart.js failed to load — skipping the radar chart, rest of the report still works.");
-    document.getElementById("radar-chart").insertAdjacentHTML(
-      "afterend", `<p class="hint">Chart library didn't load — scores are still listed below.</p>`);
+    console.error("Chart.js failed to load — skipping charts, rest of the report still works.");
+    document.querySelectorAll(".chart-box").forEach(box =>
+      box.insertAdjacentHTML("beforeend", `<p class="hint">Chart library didn't load — scores are listed below.</p>`));
   } else {
+    Chart.defaults.font.family = "'Inter', sans-serif";
+    Chart.defaults.color = "#5A6B7A";
+
+    // --- Radar: score profile across dimensions ---
+    if (radarChart) radarChart.destroy();
     radarChart = new Chart(document.getElementById("radar-chart"), {
       type: "radar",
-      data: radarData,
+      data: {
+        labels: ["Content", "Eye contact", "Pace", "Low fillers", "Expression"],
+        datasets: [{
+          label: "Your score",
+          data: [avg("contentScore"), avg("eyePct"), avg("paceScore"), avg("fillerScore"), avg("smilePct")],
+          backgroundColor: "rgba(127,168,201,0.28)",
+          borderColor: PALETTE[0],
+          pointBackgroundColor: PALETTE[1],
+          pointRadius: 4
+        }]
+      },
       options: {
+        responsive: true, maintainAspectRatio: false,
         scales: { r: { min: 0, max: 100, ticks: { stepSize: 25, backdropColor: "transparent" } } },
+        plugins: { legend: { display: false } }
+      }
+    });
+
+    // --- Bar: overall score per question, multi-color, skipped shown muted ---
+    if (barChart) barChart.destroy();
+    barChart = new Chart(document.getElementById("bar-chart"), {
+      type: "bar",
+      data: {
+        labels: state.answers.map((a, i) => `Q${i + 1}${a && a.isFollowUp ? " (f/u)" : ""}`),
+        datasets: [{
+          label: "Overall score",
+          data: state.answers.map(a => a ? a.overall : 0),
+          backgroundColor: state.answers.map((a, i) => a && a.skipped ? MUTED : PALETTE[i % PALETTE.length]),
+          borderRadius: 6
+        }]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        scales: { y: { min: 0, max: 100 } },
+        plugins: { legend: { display: false } }
+      }
+    });
+
+    // --- Bar: time spent per question ---
+    if (timeChart) timeChart.destroy();
+    timeChart = new Chart(document.getElementById("time-chart"), {
+      type: "bar",
+      data: {
+        labels: state.answers.map((a, i) => `Q${i + 1}${a && a.isFollowUp ? " (f/u)" : ""}`),
+        datasets: [{
+          label: "Seconds spent",
+          data: state.answers.map(a => a ? Math.round(a.timeSec) : 0),
+          backgroundColor: state.answers.map((a, i) => a && a.skipped ? MUTED : PALETTE[(i + 3) % PALETTE.length]),
+          borderRadius: 6
+        }]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        scales: { y: { beginAtZero: true, title: { display: true, text: "seconds" } } },
         plugins: { legend: { display: false } }
       }
     });
@@ -687,15 +773,16 @@ function buildReport() {
   const container = document.getElementById("qa-breakdown");
   container.innerHTML = state.answers.map((a, i) => {
     if (!a) return "";
+    const followTag = a.isFollowUp ? `<span class="qa-followup-tag">follow-up</span>` : "";
     if (a.skipped) return `
       <div class="qa-item">
-        <p class="qa-q">${i + 1}. ${escapeHtml(a.question)}</p>
+        <p class="qa-q">${i + 1}. ${escapeHtml(a.question)}${followTag}</p>
         <p class="qa-ans">Skipped.</p>
       </div>`;
     const fb = ruleBasedFeedback(a);
     return `
       <div class="qa-item">
-        <p class="qa-q">${i + 1}. ${escapeHtml(a.question)}</p>
+        <p class="qa-q">${i + 1}. ${escapeHtml(a.question)}${followTag}</p>
         <p class="qa-ans">${escapeHtml(a.transcript) || "<em>(no speech captured)</em>"}</p>
         <div class="qa-scores">
           <div><strong>${a.overall}</strong>Overall</div>
@@ -703,6 +790,8 @@ function buildReport() {
           <div><strong>${a.eyePct}%</strong>Eye contact</div>
           <div><strong>${a.wpm}</strong>WPM</div>
           <div><strong>${a.fillerCount}</strong>Fillers</div>
+          <div><strong>${formatTime(a.timeSec)}</strong>Time</div>
+          <div><strong>${clarityLabel(a)}</strong>Clarity</div>
         </div>
         ${a.llmFeedback ? `<p class="qa-fb">${escapeHtml(a.llmFeedback)}</p>` : fb}
       </div>`;
