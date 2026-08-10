@@ -44,7 +44,6 @@ const state = {
   questions: [],      // [{ text, keywords, isFollowUp?, skill? }]
   currentQ: 0,
   answers: [],         // per-question results
-  apiKey: localStorage.getItem("hrgoggle_key") || "",
 
   interviewStartTime: null,
   interviewEndTime: null,
@@ -114,24 +113,6 @@ document.querySelectorAll(".rail-step").forEach(btn => {
 });
 
 /* ---------------------------------------------------------------------
-   SETTINGS OVERLAY (OpenAI key — optional, tucked away from the main flow)
---------------------------------------------------------------------- */
-const settingsOverlay = document.getElementById("settings-overlay");
-document.getElementById("settings-btn").addEventListener("click", () => { settingsOverlay.hidden = false; });
-document.getElementById("settings-close").addEventListener("click", () => { settingsOverlay.hidden = true; });
-settingsOverlay.addEventListener("click", (e) => { if (e.target === settingsOverlay) settingsOverlay.hidden = true; });
-
-const keyInput = document.getElementById("api-key-input");
-keyInput.value = state.apiKey;
-document.getElementById("save-key-btn").addEventListener("click", () => {
-  state.apiKey = keyInput.value.trim();
-  localStorage.setItem("hrgoggle_key", state.apiKey);
-  document.getElementById("key-status").textContent = state.apiKey
-    ? "Key saved for this browser. New question generation will use it."
-    : "Key cleared — using local keyword-based generation.";
-});
-
-/* ---------------------------------------------------------------------
    RESUME UPLOAD + PARSING
 --------------------------------------------------------------------- */
 const dropzone = document.getElementById("dropzone");
@@ -183,17 +164,7 @@ async function handleResumeFile(file) {
 
 async function buildInterviewFromResume(text) {
   state.skills = extractSkills(text);
-
-  if (state.apiKey) {
-    try {
-      state.questions = await generateQuestionsWithLLM(text, state.skills);
-    } catch (err) {
-      console.warn("LLM question generation failed, falling back to local generation.", err);
-      state.questions = generateQuestionsLocally(text, state.skills);
-    }
-  } else {
-    state.questions = generateQuestionsLocally(text, state.skills);
-  }
+  state.questions = generateQuestionsLocally(text, state.skills);
 
   document.getElementById("parse-status").hidden = true;
   const readyEl = document.getElementById("ready-status");
@@ -273,52 +244,6 @@ function generateQuestionsLocally(text, skills) {
 }
 
 function truncate(s, n) { return s.length > n ? s.slice(0, n).trim() + "…" : s; }
-
-/* ---------------------------------------------------------------------
-   OPTIONAL: LLM-POWERED QUESTIONS (only if user pastes an API key)
---------------------------------------------------------------------- */
-async function callOpenAI(messages, jsonMode = false) {
-  const res = await fetch("https://api.openai.com/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${state.apiKey}`
-    },
-    body: JSON.stringify({
-      model: "gpt-4o-mini",
-      messages,
-      temperature: 0.6,
-      ...(jsonMode ? { response_format: { type: "json_object" } } : {})
-    })
-  });
-  if (!res.ok) throw new Error(`OpenAI request failed: ${res.status}`);
-  const data = await res.json();
-  return data.choices[0].message.content;
-}
-
-async function generateQuestionsWithLLM(resumeText, skills) {
-  const prompt = `You are a technical interviewer. Given this resume text, write 4 main interview questions
-specific to the candidate's actual projects and skills (not generic), and for each main question also write
-one short natural spoken follow-up question that only makes sense if the main one was answered. For each
-question give 4-6 short keywords a strong answer would likely include (for scoring). Resume:
-"""${resumeText.slice(0, 6000)}"""
-Respond ONLY with JSON:
-{"questions":[
-  {"text":"...","keywords":["...","..."],"isFollowUp":false},
-  {"text":"...","keywords":["...","..."],"isFollowUp":true}
-]}
-List each main question immediately followed by its follow-up, in that order.`;
-  const content = await callOpenAI([{ role: "user", content: prompt }], true);
-  const parsed = JSON.parse(content);
-  return parsed.questions.slice(0, 8);
-}
-
-async function getLLMFeedback(question, transcript) {
-  const prompt = `Interview question: "${question}"
-Candidate's spoken answer (transcribed): "${transcript}"
-In 2 short sentences, give direct, specific, encouraging-but-honest feedback on the content of this answer.`;
-  return callOpenAI([{ role: "user", content: prompt }]);
-}
 
 /* ---------------------------------------------------------------------
    START INTERVIEW
@@ -598,15 +523,7 @@ async function recordAnswerResult(skipped = false) {
     isFollowUp: !!q.isFollowUp,
     fillerCount: state.fillerCount, eyePct, smilePct,
     contentScore, paceScore, fillerScore, deliveryScore, overall,
-    llmFeedback: null
   };
-
-  if (state.apiKey && !skipped && transcript.length > 0) {
-    try {
-      const feedback = await getLLMFeedback(q.text, transcript);
-      if (state.answers[qIndex]) state.answers[qIndex].llmFeedback = feedback; // guard: index still valid
-    } catch (e) { console.warn("LLM feedback failed", e); }
-  }
 }
 
 function scoreContent(transcript, keywords) {
@@ -651,8 +568,7 @@ function autoSkipOrphanedFollowUp() {
     state.answers[state.currentQ] = {
       question: q.text, transcript: "", skipped: true, words: 0, wpm: 0, timeSec: 0,
       isFollowUp: true, fillerCount: 0, eyePct: 0, smilePct: 0,
-      contentScore: 0, paceScore: 0, fillerScore: 0, deliveryScore: 0, overall: 0,
-      llmFeedback: null
+      contentScore: 0, paceScore: 0, fillerScore: 0, deliveryScore: 0, overall: 0
     };
     return true;
   }
@@ -793,7 +709,7 @@ function buildReport() {
           <div><strong>${formatTime(a.timeSec)}</strong>Time</div>
           <div><strong>${clarityLabel(a)}</strong>Clarity</div>
         </div>
-        ${a.llmFeedback ? `<p class="qa-fb">${escapeHtml(a.llmFeedback)}</p>` : fb}
+        ${fb}
       </div>`;
   }).join("");
 }

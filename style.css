@@ -77,27 +77,8 @@ button{font-family:inherit;cursor:pointer;}
 .rail-step:disabled{opacity:.4;cursor:not-allowed;}
 
 .rail-foot{font-size:11px;color:#6E8090;border-top:1px solid rgba(255,255,255,.08);padding-top:16px;}
-.rail-settings-btn{
-  background:none;border:1px solid rgba(255,255,255,.15);color:#CBD6DE;
-  padding:8px 12px;border-radius:7px;font-size:12.5px;margin-bottom:12px;width:100%;text-align:left;
-}
-.rail-settings-btn:hover{border-color:var(--brass);color:#fff;}
 
 .stage{padding:56px 64px 80px;max-width:1080px;}
-
-/* ===== Overlay (settings modal) ===== */
-.overlay{
-  position:fixed;inset:0;background:rgba(28,46,66,.5);
-  display:flex;align-items:center;justify-content:center;z-index:50;padding:20px;
-}
-.overlay-card{
-  background:var(--paper);border-radius:var(--radius);padding:28px;max-width:480px;width:100%;
-  box-shadow:0 20px 50px rgba(28,46,66,.25);
-}
-.overlay-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;}
-.overlay-head h2{margin:0;}
-.icon-btn{background:none;border:none;font-size:16px;color:var(--ink-soft);padding:4px;}
-.icon-btn:hover{color:var(--ink);}
 
 /* ===== Views ===== */
 .view{display:none;}
@@ -169,10 +150,6 @@ h3{font-family:var(--font-display);font-size:16px;font-weight:600;margin:0 0 10p
 
 .hint{font-size:13px;color:var(--ink-soft);margin:0 0 14px;}
 
-.overlay-card input[type=password]{
-  width:100%;padding:10px 12px;border:1px solid var(--hairline);border-radius:6px;
-  font-family:var(--font-mono);font-size:13px;margin-bottom:10px;
-}
 
 /* ===== Buttons ===== */
 .primary-btn{
@@ -264,7 +241,7 @@ h3{font-family:var(--font-display);font-size:16px;font-weight:600;margin:0 0 10p
 
 /* ===== Misc ===== */
 @media print{
-  .rail, .controls-row, .overlay{display:none !important;}
+  .rail, .controls-row{display:none !important;}
   #app{display:block;}
   .stage{padding:0;max-width:none;}
 }

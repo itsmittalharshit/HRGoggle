@@ -38,24 +38,9 @@
     </nav>
 
     <div class="rail-foot">
-      <button class="rail-settings-btn" id="settings-btn">⚙ Settings</button>
       <p>Runs entirely in your browser. Nothing is uploaded to a server.</p>
     </div>
   </aside>
-
-  <!-- ============ SETTINGS OVERLAY ============ -->
-  <div class="overlay" id="settings-overlay" hidden>
-    <div class="overlay-card">
-      <div class="overlay-head">
-        <h2>Settings</h2>
-        <button class="icon-btn" id="settings-close">✕</button>
-      </div>
-      <p class="hint">Optional. Paste an OpenAI API key to generate richer, resume-grounded questions and short written feedback instead of the built-in keyword matching. The key stays in this browser tab only (saved to localStorage) and is sent directly from your browser to OpenAI — fine for local testing, <strong>do not use this on a publicly shared copy of the site</strong>, since the key would be visible to anyone who opens dev tools.</p>
-      <input type="password" id="api-key-input" placeholder="sk-...">
-      <button class="ghost-btn" id="save-key-btn">Save key for this browser</button>
-      <p class="hint" id="key-status"></p>
-    </div>
-  </div>
 
   <!-- ============ MAIN ============ -->
   <main class="stage">
