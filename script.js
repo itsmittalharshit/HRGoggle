@@ -1,5 +1,5 @@
 /* =========================================================================
-   CandidLens — client-side AI mock interview coach
+   HRGoggle — client-side AI mock interview coach
    No backend. PDF parsing (pdf.js), face analysis (MediaPipe Face Mesh),
    speech-to-text (Web Speech API), and rule-based / optional-LLM scoring.
    ========================================================================= */
@@ -16,7 +16,7 @@ const state = {
   questions: [],      // [{ text, keywords }]
   currentQ: 0,
   answers: [],         // per-question results
-  apiKey: localStorage.getItem("candidlens_key") || "",
+  apiKey: localStorage.getItem("hrgoggle_key") || "",
 
   // live interview trackers
   recognizing: false,
@@ -252,7 +252,7 @@ const keyInput = document.getElementById("api-key-input");
 keyInput.value = state.apiKey;
 document.getElementById("save-key-btn").addEventListener("click", () => {
   state.apiKey = keyInput.value.trim();
-  localStorage.setItem("candidlens_key", state.apiKey);
+  localStorage.setItem("hrgoggle_key", state.apiKey);
   document.getElementById("key-status").textContent = state.apiKey
     ? "Key saved for this browser. New question generation will use it."
     : "Key cleared — using local keyword-based generation.";

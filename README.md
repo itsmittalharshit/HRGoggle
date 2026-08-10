@@ -1,6 +1,6 @@
-# CandidLens — Multimodal AI Mock Interview Coach
+# HRGoggle — Multimodal AI Mock Interview Coach
 
-**Live demo:** https://itsmittalharshit.github.io/candidlens/ *(update after publishing — see below)*
+**Live demo:** https://itsmittalharshit.github.io/HRGoggle/
 
 A browser-based mock interview platform. Upload a resume, get interview
 questions generated from your actual projects and skills, answer on
@@ -16,7 +16,7 @@ browser.
 
 ## Demo
 
-https://github.com/itsmittalharshit/candidlens/assets/DEMO-VIDEO-ID
+https://github.com/itsmittalharshit/HRGoggle/assets/DEMO-VIDEO-ID
 
 *(See "Adding the demo video" below — replace this line once you've
 uploaded a clip.)*
@@ -148,8 +148,8 @@ no backend — deployed as a static site on GitHub Pages.
 ## Running it
 
 ```bash
-git clone https://github.com/itsmittalharshit/candidlens.git
-cd candidlens
+git clone https://github.com/itsmittalharshit/HRGoggle.git
+cd HRGoggle
 python3 -m http.server 8000
 # open http://localhost:8000
 ```
